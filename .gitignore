@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 本地配置：含 moemail API Key、代理地址等，不要提交
+# 需要模板见 config.example.json
+config.json
+
+# 运行产物：注册出来的账号、Token、静态资源缓存、验证码诊断数据
+Results/
