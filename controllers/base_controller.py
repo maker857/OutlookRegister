@@ -304,6 +304,19 @@ class BaseBrowserController(ABC):
             self.smooth_type(page, code_input, verify_code)
 
         except Exception as e:
+            # 走到这里不代表账号真的建成了：验证码可能只是被误判为通过(例如挑战按钮消失
+            # 就当成功的兜底分支)，此时页面压根没离开 signup.live.com。
+            # 实测验证码真通过后，页面会在十几秒内跳到 account.live.com/interrupt/credentialaction。
+            try:
+                current_url = page.url or ""
+            except Exception:
+                current_url = ""
+
+            if "signup.live.com" in current_url:
+                print(f"[Error: Not Registered] - {email}{self.email_suffix} 未完成注册，"
+                      f"页面仍停留在注册页，验证码很可能并未真正通过: {e}")
+                return False
+
             print(f"[Error: Proof Email] - {email}{self.email_suffix}注册成功，但辅助邮箱绑定失败: {e}")
             filename = os.path.join(self.results_dir, 'unbound_accounts.txt')
             with open(filename, 'a', encoding='utf-8') as f:

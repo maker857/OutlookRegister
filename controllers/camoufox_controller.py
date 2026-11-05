@@ -239,18 +239,28 @@ class CamoufoxController(BaseBrowserController):
     HOLD_BTN = '[aria-label^="按住"]'
     A11Y_BTN = '[aria-label="可访问性挑战"]'
 
-    def _captcha_frame(self, page, timeout=25.0):
+    def _captcha_frame(self, page, timeout=30.0):
+        """
+        找到真正带按住按钮的那个 frame。不限定 hsprotect 域名：控件偶尔会换载体，
+        限定域名会直接找不到。找不到时顺便看看是不是只有辅助功能入口，便于定位。
+        """
         deadline = time.time() + timeout
         while time.time() < deadline:
             for fr in page.frames:
-                if "hsprotect" not in (fr.url or ""):
-                    continue
                 try:
                     if fr.locator(self.HOLD_BTN).count() > 0:
                         return fr
                 except Exception:
                     continue
             page.wait_for_timeout(250)
+
+        for fr in page.frames:
+            try:
+                if fr.locator(self.A11Y_BTN).count() > 0:
+                    print(f"[Info: Captcha] - 只找到辅助功能入口而没有按住按钮，frame={fr.url[:90]}")
+                    break
+            except Exception:
+                continue
         return None
 
     def _captcha_passed(self, page):
@@ -274,43 +284,72 @@ class CamoufoxController(BaseBrowserController):
 
     def _challenge_status(self, page):
         """
-        读控件里 aria-live 的播报，这是唯一能分辨"被拒"还是"要求再按一次"的信号：
+        读控件里的文字，这是唯一能分辨"被拒"还是"要求再按一次"的信号：
           "Human Challenge已完成，请稍候"      -> 本次按压被接受
           "请再试一次 / Keep going / 重新开始"  -> 被拒(IP / 指纹问题)
           "再按一次 / Press and hold again"     -> 还需要一轮
-        每次重新遍历 page.frames，不持有可能已销毁的 frame 句柄。
-        """
-        for fr in page.frames:
-            if "hsprotect" not in (fr.url or ""):
-                continue
-            try:
-                if fr.locator('[aria-live="assertive"]').count() == 0:
-                    continue
-                txt = fr.evaluate(
-                    "() => { const e = document.querySelector('[aria-live=\"assertive\"]');"
-                    " return e ? e.textContent.trim().slice(0, 80) : ''; }"
-                )
-                if txt:
-                    return txt
-            except Exception:
-                continue
-        return ""
 
-    def _hold_button_present(self, page):
-        """每次都重新遍历 page.frames，避免持有已被销毁的 frame 句柄"""
+        只读 [aria-live="assertive"] 不够：控件被重建后播报会清空，而且页面上同时存在
+        多个 hsprotect 兄弟 frame，先命中的那个往往是空壳。这里把所有相关 frame 的可见
+        文字都收上来去重，哪怕文案变了也能看见。每次重新遍历 page.frames，不持有句柄。
+        """
+        seen = []
         for fr in page.frames:
             if "hsprotect" not in (fr.url or ""):
                 continue
             try:
-                if fr.locator(self.HOLD_BTN).count() > 0:
-                    return True
+                txt = fr.evaluate(
+                    "() => {"
+                    " const live = document.querySelector('[aria-live=\"assertive\"]');"
+                    " const parts = [live && live.textContent, document.body && document.body.innerText];"
+                    " return parts.filter(Boolean).map(t => t.replace(/\\s+/g, ' ').trim())"
+                    "             .filter(t => t).join(' | ');"
+                    "}"
+                )
             except Exception:
                 continue
-        return False
+            if txt and txt not in seen:
+                seen.append(txt)
+        return " || ".join(seen)[:200]
+
+    def _challenge_state(self, page):
+        """
+        控件当前处于哪种状态。每次重新遍历 page.frames，不持有可能已销毁的句柄。
+
+          "verifying" 校验动画在跑(.draw：打勾 / 水波 / ••• 等待点)，必须继续等。
+                      这时候重按会打断正在进行的校验，表现就是无限重发挑战。
+          "ready"     按钮在且没有任何动画，说明这一轮确实没过，可以重按
+          "gone"      已经找不到按压控件，通常是校验通过后正在跳转
+        """
+        state = "gone"
+        for fr in page.frames:
+            try:
+                if fr.locator('.draw').count() > 0:
+                    return "verifying"
+                if fr.locator(self.HOLD_BTN).count() > 0:
+                    state = "ready"
+            except Exception:
+                continue
+        return state
 
     def _press_and_hold(self, page, frame):
-        """按住按钮不放，直到验证完成 / 控件消失 / 到达 captcha_hold 上限再松手"""
+        """按住按钮不放，直到控件给出动画 / 控件消失 / 到达 captcha_hold 上限再松手"""
         btn = frame.locator(self.HOLD_BTN).first
+
+        # 优先用 locator.hover()：它自带可操作性检查(可见、位置稳定、该点确实能收到事件)，
+        # 并由 Playwright 自己换算跨 frame 坐标。手工 bounding_box + mouse.move 的问题是
+        # 控件重绘后坐标可能已经失效，按下去落在空处，表现就是控件毫无反应。
+        try:
+            btn.scroll_into_view_if_needed(timeout=5000)
+        except Exception:
+            pass
+        try:
+            btn.hover(timeout=8000)
+            moved = True
+        except Exception as e:
+            print(f"[Info: Captcha] - hover 失败({type(e).__name__})，回退到坐标点击")
+            moved = False
+
         try:
             box = btn.bounding_box()
         except Exception:
@@ -318,9 +357,10 @@ class CamoufoxController(BaseBrowserController):
         if not box:
             return False
 
-        tx = box['x'] + box['width'] / 2 + random.uniform(-8, 8)
-        ty = box['y'] + box['height'] / 2 + random.uniform(-4, 4)
-        self.smooth_move_to(page, tx, ty)
+        tx = box['x'] + box['width'] / 2
+        ty = box['y'] + box['height'] / 2
+        if not moved:
+            self.smooth_move_to(page, tx, ty)
         page.wait_for_timeout(random.randint(90, 220))
 
         page.mouse.down()
@@ -329,8 +369,9 @@ class CamoufoxController(BaseBrowserController):
             while time.time() < deadline:
                 page.wait_for_timeout(200)
                 try:
-                    # 实测按住约 2 ~ 4 秒后出现打勾动画，aria-live 播报"Human Challenge已完成"
-                    if frame.locator('#checkmark.draw').count() > 0:
+                    # 实测按住 2 ~ 4 秒后控件开始出动画(打勾 / 水波 / ••• 等待点)，
+                    # 这就表示这一次按压已经被接受，继续死按到 captcha_hold 上限反而不像人。
+                    if frame.locator('.draw').count() > 0:
                         break
                     if frame.locator(self.HOLD_BTN).count() == 0:
                         break
@@ -343,22 +384,25 @@ class CamoufoxController(BaseBrowserController):
             self.set_last_pos(tx, ty)
         return True
 
-    def _wait_captcha_result(self, page, timeout=35.0):
+    def _wait_captcha_result(self, page, timeout=45.0):
         """
         松手后页面要走一串跳转才落地：
         正在加载... -> login.live.com/oauth20_authorize.srf -> account.live.com/interrupt/credentialaction
         实测约 13 秒，期间 hsprotect 的 frame 会被销毁，不能把"查不到控件"当成失败。
+
+        只有控件"按钮在且没有动画"时才算这一轮没过。控件转圈(.draw)的时候重按，
+        会把正在进行的校验打断，日志上就表现为每次按压都被接受却无限重发挑战。
         返回 "passed" / "limited" / "retry" / "timeout"
         """
         deadline = time.time() + timeout
-        grace = time.time() + 2.5      # 松手后给控件一点时间消失，别立刻判成需要重按
+        grace = time.time() + 2.5      # 松手后给控件一点时间进入校验态，别立刻判成需要重按
         while time.time() < deadline:
             page.wait_for_timeout(400)
             if self._captcha_passed(page):
                 return "passed"
             if self._rate_limited(page):
                 return "limited"
-            if time.time() > grace and self._hold_button_present(page):
+            if time.time() > grace and self._challenge_state(page) == "ready":
                 return "retry"
         return "timeout"
 
@@ -390,19 +434,20 @@ class CamoufoxController(BaseBrowserController):
             if result == "limited":
                 print("[Error: Rate limit] - 正常通过验证码，但当前IP注册频率过快。")
                 return False
+            if result == "timeout":
+                # 一直停在校验中，既没放行也没把按钮还回来，再按只会打断它
+                print("[Info: Captcha] - 控件长时间停在校验中，放弃本次尝试。")
+                return self._captcha_passed(page)
 
-            # 控件又发了一次挑战。控件说明是"等待确认，并在出现提示时再按一次"，
-            # 立刻重按会被判掉(旧的 playwright 控制器两次按压之间等了 11.5 秒)，
-            # 这里先等播报里的"请稍候"消失，再按人的节奏停几秒。
+            # 控件把按钮还回来了且没有动画在跑，这一轮确实没过。
+            # 控件说明是"等待确认，并在出现提示时再按一次"，立刻重按会被判掉
+            # (旧的 playwright 控制器两次按压之间等了 11.5 秒)，这里按人的节奏停几秒。
             last_status = self._challenge_status(page) or last_status
             print(f"[Info: Captcha] - 第 {attempt + 1} 次按压未放行"
                   f"{('，控件播报: ' + last_status) if last_status else ''}")
 
             deadline = time.time() + 12
-            while time.time() < deadline:
-                status = self._challenge_status(page)
-                if not status or ("稍候" not in status and "wait" not in status.lower()):
-                    break
+            while time.time() < deadline and self._challenge_state(page) == "verifying":
                 page.wait_for_timeout(500)
             page.wait_for_timeout(random.randint(2500, 5000))
 
@@ -411,7 +456,8 @@ class CamoufoxController(BaseBrowserController):
 
         if last_status:
             print(f"[Error: Captcha] - 按压次数用尽，控件最后播报: {last_status}")
-        print("[Hint] - 每次按压都被接受却反复重发挑战，通常是出口 IP 信誉问题，换一个干净 IP 再试。")
+        print("[Hint] - 播报里带'请再试一次 / Keep going'才是被拒(出口 IP 信誉问题)；"
+              "若只是反复出现按钮而无拒绝文案，多半是按压节奏问题，可调大 max_captcha_retries。")
         return False
 
     def clean_up(self, page=None, type="all_browser"):
