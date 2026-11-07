@@ -4,7 +4,7 @@ import time
 import random
 import platform
 from playwright.sync_api import sync_playwright
-from camoufox.sync_api import NewBrowser, NewContext
+from camoufox.sync_api import NewBrowser
 from .base_controller import BaseBrowserController
 from . import static_cache
 
@@ -145,7 +145,11 @@ class CamoufoxController(BaseBrowserController):
         self.browser_path = cfg.get("browser_path", "")
         self.headless = bool(cfg.get("headless", False))
         self.humanize = cfg.get("humanize", True)
+        # 逗号分隔，第一个给 Intl / 页面语言(注册页选择器是中文的)，其余作为 navigator.languages
+        # 与 Accept-Language 的后备语言。只写 zh-CN 时补上后备，单一语言配外国 IP 不像真人。
         self.locale = cfg.get("locale") or "zh-CN"
+        if "," not in self.locale:
+            self.locale += ",zh,en-US,en"
         self.geoip = cfg.get("geoip", True)
         self.enable_cache = bool(cfg.get("enable_cache", True))
         # 这两项 Camoufox 官方都标注为可被 WAF 检测，默认关掉，换通过率：
@@ -210,15 +214,11 @@ class CamoufoxController(BaseBrowserController):
         if not browser:
             return False
 
-        # 每个注册任务单独一个 context，拿一套独立指纹(navigator / screen / WebGL / fonts)
-        context = None
-        if self.per_task_identity:
-            try:
-                context = NewContext(browser, locale=self.locale)
-            except Exception as e:
-                print(f"独立指纹 context 创建失败，回退到普通 context: {e}")
-        if context is None:
-            context = browser.new_context(locale=self.locale)
+        # 用启动时生成的身份，不用 NewContext：它把 viewport 强制成整个屏幕大小，
+        # 页面读到 innerWidth > outerWidth、outerHeight > screen.height 这种不可能的窗口几何。
+        # 每任务独立指纹改为每任务重启浏览器实现，见 clean_up。
+        # 不传 locale：Playwright 会把 Accept-Language 覆盖成单一语言，交给启动参数里的 locale 列表。
+        context = browser.new_context(no_viewport=True)
 
         if self.traffic_mode == "aggressive":
             _setup_traffic_route(context, self.proxy)
@@ -466,6 +466,21 @@ class CamoufoxController(BaseBrowserController):
                 page.context.close()
             except Exception:
                 pass
+            if self.per_task_identity:
+                # 关掉本线程的浏览器，下个任务重新启动，拿一套新的启动身份
+                p = getattr(self.thread_local, "playwright", None)
+                b = getattr(self.thread_local, "browser", None)
+                for close in (getattr(b, "close", None), getattr(p, "stop", None)):
+                    try:
+                        close and close()
+                    except Exception:
+                        pass
+                with self.cleanup_lock:
+                    if (p, b) in self.active_resources:
+                        self.active_resources.remove((p, b))
+                for attr in ("playwright", "browser"):
+                    if hasattr(self.thread_local, attr):
+                        delattr(self.thread_local, attr)
 
         elif type == "all_browser":
             with self.cleanup_lock:

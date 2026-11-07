@@ -400,6 +400,9 @@ class RuyipageController(BaseBrowserController):
         real_ele.click_self()
         page.actions.human_type(str(text)).perform()
 
+    # ruyipage 的 human_type 是键盘级输入，只聚焦一次，页面会自动跳格
+    type_code = smooth_type
+
     # 可以使用一个浏览器 + 多个 Tab 的形式降低内存
     def launch_browser(self):
         try:
@@ -475,6 +478,26 @@ class RuyipageController(BaseBrowserController):
                 opts.set_pref("media.peerconnection.enabled", False)
 
             page = FirefoxPage(opts)
+            # 时区跟随代理出口 IP，否则是本机时区(美国 IP 配北京时间)，查不到就保持本机
+            try:
+                proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
+                tz = requests.get("http://ip-api.com/json/?fields=timezone", proxies=proxies, timeout=10).json().get("timezone")
+                if tz:
+                    page.set_timezone(tz)
+            except Exception as e:
+                print(f"[Info: Timezone] - 未能按出口 IP 设置时区，沿用本机时区: {e}")
+
+            # 窗口随机大小与位置，限制在屏幕可用区域(去掉任务栏)内。窗口是真实系统窗口，
+            # inner / outer / screen 自然一致；只要不超出屏幕，就不会出现不可能的几何。
+            # 下限 1024x700 保证注册页是桌面布局，选择器不变。
+            try:
+                aw, ah = page.run_js("return [screen.availWidth, screen.availHeight]")
+                w = random.randint(min(1024, aw), aw) if random.random() > 0.25 else aw
+                h = random.randint(min(700, ah), ah) if w < aw else ah
+                page.window.set_size(w, h)
+                page.window.set_position(random.randint(0, aw - w), random.randint(0, ah - h))
+            except Exception as e:
+                print(f"[Info: Window] - 随机窗口尺寸失败，沿用默认: {e}")
             if self.traffic_mode == "aggressive":
                 _setup_onecdn_cache(page, self.proxy)
             return opts, page

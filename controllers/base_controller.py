@@ -134,6 +134,16 @@ class BaseBrowserController(ABC):
                 break
 
 
+    def type_code(self, page, locator, code):
+        """
+        辅助邮箱验证码：6 个单字符输入框，聚焦第一个后由页面自动跳格，填满即自动提交，没有确认按钮。
+        不能用 smooth_type：Playwright 的 locator.type 每个字符都会重新聚焦第一格，结果只填进 1 位。
+        """
+        self.smooth_click(page, locator)
+        for char in code:
+            page.keyboard.type(char, delay=random.randint(40, 110))
+            page.wait_for_timeout(random.randint(80, 200))
+
     def get_thread_browser(self):
         """
         通用逻辑:获取不同进程的浏览器
@@ -301,7 +311,10 @@ class BaseBrowserController(ABC):
 
             verify_code = mail_provider.get_verify_code()
             code_input = page.locator('#codeEntry-0')
-            self.smooth_type(page, code_input, verify_code)
+            self.type_code(page, code_input, verify_code)
+
+            # 等页面离开验证码步骤，否则调用方会直接关掉浏览器，绑定并未提交
+            code_input.wait_for(state='detached', timeout=30000)
 
         except Exception as e:
             # 走到这里不代表账号真的建成了：验证码可能只是被误判为通过(例如挑战按钮消失

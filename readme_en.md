@@ -34,12 +34,12 @@ Selectors may change frequently; timeliness is not guaranteed—please test on y
 | **`camoufox.traffic_mode`** | Leave empty, or set to `"aggressive"` (blocks remote fonts, enables static-asset interception with a local cache). |
 | **`camoufox.headless`** | Keep `false`; headless significantly lowers the pass rate. |
 | **`camoufox.humanize`** | `true`, or a number (max cursor movement time in seconds). |
-| **`camoufox.locale`** | Defaults to `"zh-CN"`; the registration selectors are Chinese, so changing this requires changing the selectors too. |
+| **`camoufox.locale`** | Defaults to `"zh-CN"`; the registration selectors are Chinese, so changing this requires changing the selectors too. A single language gets `zh,en-US,en` appended as fallbacks; a comma-separated list is used as-is. |
 | **`camoufox.geoip`** | `true` derives timezone and geolocation from the proxy's exit IP (the GeoIP database is downloaded on first run). |
 | **`camoufox.enable_cache`** | `true` reuses static assets across tasks to save bandwidth. |
 | **`camoufox.block_images`** | Defaults to `false`. Camoufox documents that blocking images triggers detection on major WAFs, and the press CAPTCHA is one; prefer `traffic_mode` for bandwidth. |
 | **`camoufox.disable_coop`** | Defaults to `false`. Disabling COOP is also WAF-detectable, and clicking the CAPTCHA inside a cross-origin iframe does not need it. |
-| **`camoufox.per_task_identity`** | `true` gives every registration task its own fingerprint (navigator / screen / WebGL / fonts). |
+| **`camoufox.per_task_identity`** | `true` relaunches the browser for every registration task to get a fresh fingerprint (navigator / screen / WebGL / fonts). |
 | **`camoufox.captcha_hold`** | Max seconds to hold the CAPTCHA button, default 14; in practice the completion signal arrives after 2–4 s and the button is released early. |
 | **`camoufox.os`** | Leave empty for random, or set `"windows"`, `"macos"`, `"linux"`. |
 | **`camoufox.window`** | Leave empty to let Camoufox decide, or set `[1440, 900]`. A fixed window size is itself a fingerprint. |

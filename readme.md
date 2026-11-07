@@ -32,12 +32,12 @@ Outlook 注册机
 | **`camoufox.traffic_mode`** | 可留空，或填入 `"aggressive"`（禁远程字体，并启用静态资源拦截与本地缓存）。 |
 | **`camoufox.headless`** | 建议 `false`，无头会显著降低通过率。 |
 | **`camoufox.humanize`** | `true` 或一个数字（鼠标移动最长耗时，单位秒）。 |
-| **`camoufox.locale`** | 默认 `"zh-CN"`，注册流程的选择器是中文的，改语言需同步改选择器。 |
+| **`camoufox.locale`** | 默认 `"zh-CN"`，注册流程的选择器是中文的，改语言需同步改选择器。只写一种语言时自动补上 `zh,en-US,en` 作为后备语言；也可直接写逗号分隔的列表。 |
 | **`camoufox.geoip`** | `true` 则时区、经纬度跟随代理出口 IP（首次运行会自动下载 GeoIP 库）。 |
 | **`camoufox.enable_cache`** | `true` 可跨任务复用静态资源，省流量。 |
 | **`camoufox.block_images`** | 默认 `false`。Camoufox 官方说明禁图片会在主流 WAF 上引发检测，按压验证码就属于这类，省流量请优先靠 `traffic_mode`。 |
 | **`camoufox.disable_coop`** | 默认 `false`。关闭 COOP 同样可能被 WAF 识别，而点跨域 iframe 里的验证码并不需要它。 |
-| **`camoufox.per_task_identity`** | `true` 则每个注册任务一套独立指纹（navigator / screen / WebGL / 字体）。 |
+| **`camoufox.per_task_identity`** | `true` 则每个注册任务重启一次浏览器，拿一套新指纹（navigator / screen / WebGL / 字体）。 |
 | **`camoufox.captcha_hold`** | 按住验证码按钮的最长秒数，默认 14；实测 2~4 秒就会出现完成信号并提前松手。 |
 | **`camoufox.os`** | 留空随机，或填 `"windows"`、`"macos"`、`"linux"`。 |
 | **`camoufox.window`** | 留空由 Camoufox 决定，或填 `[1440, 900]`。固定窗口尺寸本身是指纹特征。 |
